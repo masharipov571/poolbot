@@ -8,6 +8,15 @@ from sqlalchemy import select, func, update
 from ...database import SessionLocal
 from ... import models
 from ..keyboards.inline import get_go_home_keyboard, get_play_keyboard, get_completed_keyboard, get_completed_session_keyboard
+import json
+
+def safe_json_load(data):
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except Exception:
+            return data
+    return data
 
 router = Router()
 
@@ -84,94 +93,103 @@ async def cb_play_chunk(callback: types.CallbackQuery):
     """
     Callback trigger for the selected chunk index. Starts the actual quiz.
     """
-    _, quiz_id, chunk_index = callback.data.split("_")
-    chunk_index = int(chunk_index)
-    
-    await callback.message.delete()
-    
-    async with SessionLocal() as db:
-        q = await db.execute(select(models.Quiz).where(models.Quiz.id == quiz_id))
-        quiz = q.scalar_one_or_none()
+    try:
+        _, quiz_id, chunk_index = callback.data.split("_")
+        chunk_index = int(chunk_index)
         
-        if not quiz:
-            await callback.answer("Quiz topilmadi.", show_alert=True)
-            return
+        await callback.message.delete()
+        
+        async with SessionLocal() as db:
+            q = await db.execute(select(models.Quiz).where(models.Quiz.id == quiz_id))
+            quiz = q.scalar_one_or_none()
             
-        await start_actual_quiz(callback.bot, callback.from_user, quiz, chunk_index)
+            if not quiz:
+                await callback.answer("Quiz topilmadi.", show_alert=True)
+                return
+                
+            await start_actual_quiz(callback.bot, callback.from_user, quiz, chunk_index)
+    except Exception as e:
+        await callback.message.answer(f"❌ Testni boshlashda xatolik yuz berdi: {str(e)}")
 
 async def start_actual_quiz(bot, user, quiz, chunk_index: int):
     """
     Slices the exact questions for the chosen chunk, shuffles, sets up QuizSession, and sends the first question.
     """
-    async with SessionLocal() as db:
-        # Fetch all questions in ascending order of their creation (original order)
-        q_q = await db.execute(
-            select(models.Question)
-            .where(models.Question.quiz_id == quiz.id)
-            .order_by(models.Question.id.asc())
-        )
-        all_questions = q_q.scalars().all()
-        
-        if not all_questions:
-            await bot.send_message(chat_id=user.id, text="😔 Ushbu testda hech qanday yaroqli savol topilmadi.")
-            return
+    try:
+        async with SessionLocal() as db:
+            # Fetch all questions in ascending order of their creation (original order)
+            q_q = await db.execute(
+                select(models.Question)
+                .where(models.Question.quiz_id == quiz.id)
+                .order_by(models.Question.id.asc())
+            )
+            all_questions = q_q.scalars().all()
             
-        # Slice for the selected chunk index
-        if quiz.chunk_size > 0:
-            start_idx = chunk_index * quiz.chunk_size
-            end_idx = start_idx + quiz.chunk_size
-            selected_questions = all_questions[start_idx:end_idx]
-        else:
-            selected_questions = all_questions
-            
-        if not selected_questions:
-            await bot.send_message(chat_id=user.id, text="😔 Tanlangan qismda savollar topilmadi.")
-            return
-            
-        # Handle Shuffling configurations
-        shuf_mode = quiz.shuffle_mode or "none"
-        
-        # Make a copy of selected questions so we can shuffle inside this chunk
-        selected_questions = list(selected_questions)
-        if shuf_mode in ["questions", "both"]:
-            random.shuffle(selected_questions)
-            
-        shuffled_q_ids = [q.id for q in selected_questions]
-        
-        shuffled_options_map = {}
-        for q in selected_questions:
-            opts = list(q.options)
-            correct_opt = opts[q.correct_option_index]
-            
-            if shuf_mode in ["options", "both"]:
-                random.shuffle(opts)
+            if not all_questions:
+                await bot.send_message(chat_id=user.id, text="😔 Ushbu testda hech qanday yaroqli savol topilmadi.")
+                return
                 
-            new_correct_idx = opts.index(correct_opt)
+            # Slice for the selected chunk index
+            if quiz.chunk_size > 0:
+                start_idx = chunk_index * quiz.chunk_size
+                end_idx = start_idx + quiz.chunk_size
+                selected_questions = all_questions[start_idx:end_idx]
+            else:
+                selected_questions = all_questions
+                
+            if not selected_questions:
+                await bot.send_message(chat_id=user.id, text="😔 Tanlangan qismda savollar topilmadi.")
+                return
+                
+            # Handle Shuffling configurations
+            shuf_mode = quiz.shuffle_mode or "none"
             
-            shuffled_options_map[str(q.id)] = {
-                "options": opts,
-                "correct_option_index": new_correct_idx
-            }
+            # Make a copy of selected questions so we can shuffle inside this chunk
+            selected_questions = list(selected_questions)
+            if shuf_mode in ["questions", "both"]:
+                random.shuffle(selected_questions)
+                
+            shuffled_q_ids = [q.id for q in selected_questions]
             
-        # Create a new active QuizSession
-        session = models.QuizSession(
-            user_id=user.id,
-            quiz_id=quiz.id,
-            selected_question_count=len(selected_questions),
-            timer_seconds=quiz.timer_seconds or 0,
-            current_question_index=0,
-            score=0,
-            status="active",
-            chunk_index=chunk_index,
-            shuffled_questions=shuffled_q_ids,
-            shuffled_options_map=shuffled_options_map
+            shuffled_options_map = {}
+            for q in selected_questions:
+                opts = list(q.options)
+                correct_opt = opts[q.correct_option_index]
+                
+                if shuf_mode in ["options", "both"]:
+                    random.shuffle(opts)
+                    
+                new_correct_idx = opts.index(correct_opt)
+                
+                shuffled_options_map[str(q.id)] = {
+                    "options": opts,
+                    "correct_option_index": new_correct_idx
+                }
+                
+            # Create a new active QuizSession
+            session = models.QuizSession(
+                user_id=user.id,
+                quiz_id=quiz.id,
+                selected_question_count=len(selected_questions),
+                timer_seconds=quiz.timer_seconds or 0,
+                current_question_index=0,
+                score=0,
+                status="active",
+                chunk_index=chunk_index,
+                shuffled_questions=shuffled_q_ids,
+                shuffled_options_map=shuffled_options_map
+            )
+            db.add(session)
+            await db.commit()
+            await db.refresh(session)
+            
+            # Send first question
+            await send_next_question_to_user(bot, user.id, session.id)
+    except Exception as e:
+        await bot.send_message(
+            chat_id=user.id,
+            text=f"❌ Testni ishga tushirishda xatolik: {str(e)}"
         )
-        db.add(session)
-        await db.commit()
-        await db.refresh(session)
-        
-        # Send first question
-        await send_next_question_to_user(bot, user.id, session.id)
 
 @router.callback_query(F.data.startswith("start_code_quiz_"))
 async def cb_start_code_quiz(callback: types.CallbackQuery):
@@ -186,171 +204,197 @@ async def send_next_question_to_user(bot, user_id: int, session_id: str):
     """
     Dispatches the active question for a session using Telegram Polls.
     """
-    async with SessionLocal() as db:
-        sess_q = await db.execute(select(models.QuizSession).where(models.QuizSession.id == session_id))
-        session = sess_q.scalar_one_or_none()
-        
-        if not session or session.status != "active":
-            return
+    try:
+        async with SessionLocal() as db:
+            sess_q = await db.execute(select(models.QuizSession).where(models.QuizSession.id == session_id))
+            session = sess_q.scalar_one_or_none()
             
-        # Check if completed
-        if session.current_question_index >= session.selected_question_count:
-            await complete_quiz_session(bot, user_id, session)
-            return
+            if not session or session.status != "active":
+                return
+                
+            shuffled_questions = safe_json_load(session.shuffled_questions)
+            shuffled_options_map = safe_json_load(session.shuffled_options_map)
             
-        # Get active question ID
-        q_id = session.shuffled_questions[session.current_question_index]
-        q_q = await db.execute(select(models.Question).where(models.Question.id == q_id))
-        question = q_q.scalar_one_or_none()
-        
-        if not question:
-            # Skip if database error
-            session.current_question_index += 1
-            await db.commit()
-            await send_next_question_to_user(bot, user_id, session_id)
-            return
+            # Check if completed
+            if session.current_question_index >= session.selected_question_count:
+                await complete_quiz_session(bot, user_id, session)
+                return
+                
+            # Get active question ID
+            q_id = shuffled_questions[session.current_question_index]
+            q_q = await db.execute(select(models.Question).where(models.Question.id == int(q_id)))
+            question = q_q.scalar_one_or_none()
             
-        # Fetch options config
-        opt_config = session.shuffled_options_map[str(q_id)]
-        options = opt_config["options"]
-        correct_idx = opt_config["correct_option_index"]
-        
-        progress_lbl = f"Savol {session.current_question_index + 1}/{session.selected_question_count}"
-        
-        # Check if question text is too long for TG Poll (Max 300 characters)
-        poll_text = f"[{progress_lbl}] {question.question_text}"
-        if len(poll_text) > 300:
-            await bot.send_message(
-                chat_id=user_id,
-                text=f"📚 **{progress_lbl}**\n\n{question.question_text}",
-                parse_mode="Markdown"
-            )
-            poll_text = "Yuqoridagi savol javobini belgilang 👇:"
+            if not question:
+                # Skip if database error
+                session.current_question_index += 1
+                await db.commit()
+                await send_next_question_to_user(bot, user_id, session_id)
+                return
+                
+            # Fetch options config
+            opt_config = shuffled_options_map[str(q_id)]
+            options = opt_config["options"]
+            correct_idx = opt_config["correct_option_index"]
             
-        # Telegram send_poll arguments
-        poll_kwargs = {
-            "chat_id": user_id,
-            "question": poll_text,
-            "options": options[:10],
-            "type": "quiz",
-            "correct_option_id": correct_idx,
-            "is_anonymous": False,
-        }
-        
-        # Apply timer if active
-        if session.timer_seconds > 0:
-            poll_kwargs["open_period"] = session.timer_seconds
+            progress_lbl = f"Savol {session.current_question_index + 1}/{session.selected_question_count}"
             
-        try:
-            poll_msg = await bot.send_poll(**poll_kwargs, reply_markup=get_play_keyboard(session.id))
+            # Check if question text is too long for TG Poll (Max 300 characters)
+            poll_text = f"[{progress_lbl}] {question.question_text}"
+            if len(poll_text) > 300:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=f"📚 **{progress_lbl}**\n\n{question.question_text}",
+                    parse_mode="Markdown"
+                )
+                poll_text = "Yuqoridagi savol javobini belgilang 👇:"
+                
+            # Telegram send_poll arguments
+            poll_kwargs = {
+                "chat_id": user_id,
+                "question": poll_text,
+                "options": options[:10],
+                "type": "quiz",
+                "correct_option_id": correct_idx,
+                "is_anonymous": False,
+            }
             
-            session.active_poll_id = poll_msg.poll.id
-            session.active_message_id = poll_msg.message_id
-            await db.commit()
-        except Exception as e:
-            # Fallback if poll creation fails
-            await bot.send_message(
-                chat_id=user_id,
-                text=f"❌ Ushbu savolni yuklashda xatolik: {str(e)}. Keyingisiga o'tilmoqda..."
-            )
-            session.current_question_index += 1
-            await db.commit()
-            await send_next_question_to_user(bot, user_id, session_id)
+            # Apply timer if active
+            if session.timer_seconds > 0:
+                poll_kwargs["open_period"] = session.timer_seconds
+                
+            try:
+                poll_msg = await bot.send_poll(**poll_kwargs, reply_markup=get_play_keyboard(session.id))
+                
+                session.active_poll_id = poll_msg.poll.id
+                session.active_message_id = poll_msg.message_id
+                await db.commit()
+            except Exception as e:
+                # Fallback if poll creation fails
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=f"❌ Ushbu savolni yuklashda xatolik: {str(e)}. Keyingisiga o'tilmoqda..."
+                )
+                session.current_question_index += 1
+                await db.commit()
+                await send_next_question_to_user(bot, user_id, session_id)
+    except Exception as ex:
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"❌ Savolni yuklashda jiddiy ichki xatolik yuz berdi: {str(ex)}"
+        )
 
 @router.poll_answer()
 async def handle_poll_answer(poll_answer: types.PollAnswer):
     """
     Listens to live poll answers, scores them and triggers the next question automatically.
     """
-    async with SessionLocal() as db:
-        # Match active session
-        sess_q = await db.execute(
-            select(models.QuizSession)
-            .where(models.QuizSession.active_poll_id == poll_answer.poll_id)
-            .where(models.QuizSession.status == "active")
-        )
-        session = sess_q.scalar_one_or_none()
-        
-        if not session:
-            return
+    try:
+        async with SessionLocal() as db:
+            # Match active session
+            sess_q = await db.execute(
+                select(models.QuizSession)
+                .where(models.QuizSession.active_poll_id == poll_answer.poll_id)
+                .where(models.QuizSession.status == "active")
+            )
+            session = sess_q.scalar_one_or_none()
             
-        # Record answer
-        q_id = session.shuffled_questions[session.current_question_index]
-        opt_config = session.shuffled_options_map[str(q_id)]
-        correct_idx = opt_config["correct_option_index"]
-        
-        selected_idx = poll_answer.option_ids[0] if poll_answer.option_ids else -1
-        is_correct = (selected_idx == correct_idx)
-        
-        # Store detailed answer
-        answer = models.PollAnswer(
-            session_id=session.id,
-            question_id=q_id,
-            user_id=poll_answer.user.id,
-            selected_option_index=selected_idx,
-            is_correct=is_correct
-        )
-        db.add(answer)
-        
-        if is_correct:
-            session.score += 1
+            if not session:
+                return
+                
+            shuffled_questions = safe_json_load(session.shuffled_questions)
+            shuffled_options_map = safe_json_load(session.shuffled_options_map)
             
-        session.current_question_index += 1
-        session.active_poll_id = None
-        
-        # Clean up inline skip button of past poll
+            # Record answer
+            q_id = shuffled_questions[session.current_question_index]
+            opt_config = shuffled_options_map[str(q_id)]
+            correct_idx = opt_config["correct_option_index"]
+            
+            selected_idx = poll_answer.option_ids[0] if poll_answer.option_ids else -1
+            is_correct = (selected_idx == correct_idx)
+            
+            # Store detailed answer
+            answer = models.PollAnswer(
+                session_id=session.id,
+                question_id=q_id,
+                user_id=poll_answer.user.id,
+                selected_option_index=selected_idx,
+                is_correct=is_correct
+            )
+            db.add(answer)
+            
+            if is_correct:
+                session.score += 1
+                
+            session.current_question_index += 1
+            session.active_poll_id = None
+            
+            # Clean up inline skip button of past poll
+            try:
+                await poll_answer.bot.edit_message_reply_markup(
+                    chat_id=poll_answer.user.id,
+                    message_id=session.active_message_id,
+                    reply_markup=None
+                )
+            except Exception:
+                pass
+                
+            await db.commit()
+            await send_next_question_to_user(poll_answer.bot, poll_answer.user.id, session.id)
+    except Exception as e:
         try:
-            await poll_answer.bot.edit_message_reply_markup(
+            await poll_answer.bot.send_message(
                 chat_id=poll_answer.user.id,
-                message_id=session.active_message_id,
-                reply_markup=None
+                text=f"❌ Javobni qabul qilishda xatolik: {str(e)}"
             )
         except Exception:
             pass
-            
-        await db.commit()
-        await send_next_question_to_user(poll_answer.bot, poll_answer.user.id, session.id)
 
 @router.callback_query(F.data.startswith("skip_"))
 async def cb_skip_question(callback: types.CallbackQuery):
     """
     Enables user to manually skip or advance when stuck.
     """
-    session_id = callback.data.split("skip_")[1]
-    
-    async with SessionLocal() as db:
-        sess_q = await db.execute(select(models.QuizSession).where(models.QuizSession.id == session_id))
-        session = sess_q.scalar_one_or_none()
+    try:
+        session_id = callback.data.split("skip_")[1]
         
-        if not session or session.status != "active":
-            await callback.answer()
-            return
+        async with SessionLocal() as db:
+            sess_q = await db.execute(select(models.QuizSession).where(models.QuizSession.id == session_id))
+            session = sess_q.scalar_one_or_none()
             
-        # Skip count
-        q_id = session.shuffled_questions[session.current_question_index]
-        
-        # Save empty answer
-        answer = models.PollAnswer(
-            session_id=session.id,
-            question_id=q_id,
-            user_id=callback.from_user.id,
-            selected_option_index=-1,
-            is_correct=False
-        )
-        db.add(answer)
-        
-        session.current_question_index += 1
-        session.active_poll_id = None
-        await db.commit()
-        
-        # Clear reply markup
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
+            if not session or session.status != "active":
+                await callback.answer()
+                return
+                
+            shuffled_questions = safe_json_load(session.shuffled_questions)
             
-        await callback.answer("Savol o'tkazib yuborildi.")
-        await send_next_question_to_user(callback.bot, callback.from_user.id, session.id)
+            # Skip count
+            q_id = shuffled_questions[session.current_question_index]
+            
+            # Save empty answer
+            answer = models.PollAnswer(
+                session_id=session.id,
+                question_id=q_id,
+                user_id=callback.from_user.id,
+                selected_option_index=-1,
+                is_correct=False
+            )
+            db.add(answer)
+            
+            session.current_question_index += 1
+            session.active_poll_id = None
+            await db.commit()
+            
+            # Clear reply markup
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+                
+            await callback.answer("Savol o'tkazib yuborildi.")
+            await send_next_question_to_user(callback.bot, callback.from_user.id, session.id)
+    except Exception as e:
+        await callback.message.answer(f"❌ Savolni o'tkazib yuborishda xatolik: {str(e)}")
 
 async def complete_quiz_session(bot, user_id: int, session: models.QuizSession):
     """
