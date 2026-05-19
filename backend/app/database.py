@@ -43,3 +43,24 @@ async def init_db():
     async with engine.begin() as conn:
         # Create all tables in database
         await conn.run_sync(Base.metadata.create_all)
+        
+    # Self-healing migration: Add new quiz columns if they don't exist
+    from sqlalchemy import text
+    async with engine.connect() as conn:
+        # List of columns to dynamically append to the quizzes table
+        columns_to_add = [
+            ("unique_code", "VARCHAR"),
+            ("chunk_size", "INTEGER DEFAULT 0"),
+            ("timer_seconds", "INTEGER DEFAULT 0"),
+            ("shuffle_mode", "VARCHAR DEFAULT 'none'")
+        ]
+        
+        for col_name, col_type in columns_to_add:
+            try:
+                await conn.execute(text(f"ALTER TABLE quizzes ADD COLUMN {col_name} {col_type};"))
+                await conn.commit()
+                print(f"✨ Database migration: Column '{col_name}' added to quizzes table.")
+            except Exception:
+                # Silently catch and pass if the column already exists or other errors occur
+                pass
+
