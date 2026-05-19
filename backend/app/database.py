@@ -46,29 +46,29 @@ async def init_db():
         
     # Self-healing migration: Add new quiz columns if they don't exist
     from sqlalchemy import text
-    async with engine.connect() as conn:
-        # List of columns to dynamically append to the quizzes table
-        columns_to_add = [
-            ("unique_code", "VARCHAR"),
-            ("chunk_size", "INTEGER DEFAULT 0"),
-            ("timer_seconds", "INTEGER DEFAULT 0"),
-            ("shuffle_mode", "VARCHAR DEFAULT 'none'")
-        ]
-        
-        for col_name, col_type in columns_to_add:
-            try:
-                await conn.execute(text(f"ALTER TABLE quizzes ADD COLUMN {col_name} {col_type};"))
-                await conn.commit()
-                print(f"✨ Database migration: Column '{col_name}' added to quizzes table.")
-            except Exception:
-                # Silently catch and pass if the column already exists or other errors occur
-                pass
-                
-        # Self-healing migration for quiz_sessions: Add chunk_index
+    
+    # List of columns to dynamically append to the quizzes table
+    columns_to_add = [
+        ("unique_code", "VARCHAR"),
+        ("chunk_size", "INTEGER DEFAULT 0"),
+        ("timer_seconds", "INTEGER DEFAULT 0"),
+        ("shuffle_mode", "VARCHAR DEFAULT 'none'")
+    ]
+    
+    for col_name, col_type in columns_to_add:
         try:
-            await conn.execute(text("ALTER TABLE quiz_sessions ADD COLUMN chunk_index INTEGER DEFAULT 0;"))
-            await conn.commit()
-            print("✨ Database migration: Column 'chunk_index' added to quiz_sessions table.")
+            async with engine.begin() as conn:
+                await conn.execute(text(f"ALTER TABLE quizzes ADD COLUMN {col_name} {col_type};"))
+            print(f"✨ Database migration: Column '{col_name}' added to quizzes table.")
         except Exception:
+            # Silently catch and pass if the column already exists or other errors occur
             pass
+            
+    # Self-healing migration for quiz_sessions: Add chunk_index
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE quiz_sessions ADD COLUMN chunk_index INTEGER DEFAULT 0;"))
+        print("✨ Database migration: Column 'chunk_index' added to quiz_sessions table.")
+    except Exception:
+        pass
 
