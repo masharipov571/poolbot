@@ -37,10 +37,33 @@ async def msg_auto_test(message: types.Message, state: FSMContext):
     Triggers the FSM state for uploading quiz files directly from the reply keyboard.
     """
     await state.set_state(UploadStates.WaitingForDocument)
+    instruction_text = (
+        "📄 **Fayl yuboring**\n\n"
+        "📁 **Qo'llab-quvvatlanadigan formatlar:** DOCX, DOC, TXT, PDF\n\n"
+        "📋 **Fayl formati:**\n"
+        "Har bir savol quyidagi shaklda bo'lishi kerak:\n\n"
+        "```text\n"
+        "+++\n"
+        "Savol matni?\n"
+        "===\n"
+        "#To'g'ri javob\n"
+        "===\n"
+        "Noto'g'ri javob 1\n"
+        "===\n"
+        "Noto'g'ri javob 2\n"
+        "===\n"
+        "Noto'g'ri javob 3\n"
+        "+++\n"
+        "```\n\n"
+        "⚠️ **Muhim:**\n"
+        "• `+++` — savol boshlanishi va tugashi\n"
+        "• `===` — variantlar orasidagi ajratuvchi\n"
+        "• `#` — to'g'ri javob oldiga qo'yiladi\n"
+        "• Har bir savolda faqat bitta to'g'ri javob bo'lek kerak\n"
+        "• Variantlar soni 2 dan 10 gacha bo'lishi mumkin"
+    )
     await message.answer(
-        "📝 **Avtomatik Test Tuzish bo'limi**\n\n"
-        "Iltimos, test savollari yozilgan **DOCX**, **PDF** yoki **TXT** faylini yuboring.\n\n"
-        "⚠️ **Eslatma:** Fayldagi savollar formatga muvofiq yozilgan bo'lishi lozim (Batafsil yordam uchun '⚙️ Yordam' tugmasini bosing).",
+        instruction_text,
         reply_markup=get_go_home_keyboard(),
         parse_mode="Markdown"
     )

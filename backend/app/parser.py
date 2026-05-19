@@ -75,6 +75,11 @@ def parse_quiz_text(raw_text: str) -> List[Dict[str, Any]]:
             # Question must have at least 2 options to be played
             continue
             
+        if len(cleaned_options) > 10:
+            raise QuizParseError(
+                f"Xatolik: '{question_text[:50]}...' savolida variantlar soni 10 tadan ko'p ({len(cleaned_options)} ta). Telegram testlarida maksimal 10 ta variant bo'lishi mumkin."
+            )
+            
         questions.append({
             "question_text": question_text,
             "options": cleaned_options,
