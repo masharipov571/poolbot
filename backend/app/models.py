@@ -64,6 +64,7 @@ class QuizSession(Base):
     current_question_index = Column(Integer, default=0)
     score = Column(Integer, default=0)
     status = Column(String(50), default="active") # active, completed, timed_out
+    chunk_index = Column(Integer, default=0)
     
     shuffled_questions = Column(JSON, nullable=True) # List of question IDs in shuffled order
     shuffled_options_map = Column(JSON, nullable=True) # Map of QuestionID -> { options: List[str], correct_index: int }

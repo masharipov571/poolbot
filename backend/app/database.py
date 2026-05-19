@@ -63,4 +63,12 @@ async def init_db():
             except Exception:
                 # Silently catch and pass if the column already exists or other errors occur
                 pass
+                
+        # Self-healing migration for quiz_sessions: Add chunk_index
+        try:
+            await conn.execute(text("ALTER TABLE quiz_sessions ADD COLUMN chunk_index INTEGER DEFAULT 0;"))
+            await conn.commit()
+            print("✨ Database migration: Column 'chunk_index' added to quiz_sessions table.")
+        except Exception:
+            pass
 

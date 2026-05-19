@@ -109,3 +109,24 @@ def get_parts_keyboard(quiz_id: str, total: int, chunk: int) -> InlineKeyboardMa
     builder.adjust(1)
     return builder.as_markup()
 
+def get_completed_session_keyboard(quiz_id: str, current_chunk: int, total_q: int, chunk_size: int) -> InlineKeyboardMarkup:
+    """
+    Keyboard shown at the end of a session, with Qaytadan Urinish, Keyingi Qism, and Bosh Menyu.
+    """
+    builder = InlineKeyboardBuilder()
+    
+    # 1. Retry current chunk
+    builder.button(text="🔄 Qaytadan urinish", callback_data=f"playchunk_{quiz_id}_{current_chunk}")
+    
+    # 2. Next chunk (if exists)
+    if chunk_size > 0:
+        import math
+        num_parts = math.ceil(total_q / chunk_size)
+        if current_chunk < num_parts - 1:
+            builder.button(text="⏭️ Keyingi bo'lim", callback_data=f"playchunk_{quiz_id}_{current_chunk + 1}")
+            
+    # 3. Main menu
+    builder.button(text="🏠 Bosh menyu", callback_data="go_home")
+    builder.adjust(1)
+    return builder.as_markup()
+

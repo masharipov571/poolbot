@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, func, update
 from ...database import SessionLocal
 from ... import models
-from ..keyboards.inline import get_go_home_keyboard, get_play_keyboard, get_completed_keyboard
+from ..keyboards.inline import get_go_home_keyboard, get_play_keyboard, get_completed_keyboard, get_completed_session_keyboard
 
 router = Router()
 
@@ -162,6 +162,7 @@ async def start_actual_quiz(bot, user, quiz, chunk_index: int):
             current_question_index=0,
             score=0,
             status="active",
+            chunk_index=chunk_index,
             shuffled_questions=shuffled_q_ids,
             shuffled_options_map=shuffled_options_map
         )
@@ -358,41 +359,83 @@ async def complete_quiz_session(bot, user_id: int, session: models.QuizSession):
     session.status = "completed"
     session.completed_at = datetime.datetime.utcnow()
     
-    # Calculate percentages
-    pct = round((session.score / session.selected_question_count) * 100, 1) if session.selected_question_count > 0 else 0
+    # Calculate duration
     duration = (session.completed_at - session.started_at).seconds
-    mins = duration // 60
-    secs = duration % 60
-    
-    # Get quiz unique code to reload cleanly
-    async with SessionLocal() as db:
-        q_res = await db.execute(select(models.Quiz.unique_code).where(models.Quiz.id == session.quiz_id))
-        code = q_res.scalar_one_or_none() or ""
+    if duration >= 60:
+        mins = duration // 60
+        secs = duration % 60
+        time_str = f"{mins} daqiqa {secs} soniya"
+    else:
+        time_str = f"{duration} soniya"
         
+    async with SessionLocal() as db:
+        # Get Quiz details
+        q_res = await db.execute(select(models.Quiz).where(models.Quiz.id == session.quiz_id))
+        quiz = q_res.scalar_one_or_none()
+        
+        if not quiz:
+            return
+            
+        # Record session completion
         db.add(session)
         await db.commit()
         
-    performance_msg = {
-        pct >= 90: "🔥 A'lo! Mukammal natija. Siz ushbu mavzuni juda yaxshi bilasiz!",
-        pct >= 70: "✨ Juda yaxshi! Ajoyib bilim ko'rsatkichi.",
-        pct >= 50: "👍 Qoniqarli. Yana harakat qilib natijani yaxshilashingiz mumkin.",
-    }.get(True, "📚 Bo'shashmang! O'rganishda davom eting va yana harakat qilib ko'ring.")
-    
-    user_name = "O'yinchi"
-    if hasattr(session, 'user') and session.user and session.user.first_name:
-        user_name = session.user.first_name
+        # Query PollAnswers to get correct, wrong, and skipped counts
+        answers_q = await db.execute(
+            select(models.PollAnswer)
+            .where(models.PollAnswer.session_id == session.id)
+        )
+        answers = answers_q.scalars().all()
         
-    score_card = (
-        f"🏁 **Test Yakunlandi!**\n\n"
-        f"🏆 **Natija:** {session.score}/{session.selected_question_count} ({pct}%)\n"
-        f"⏱️ **Sarflangan vaqt:** {mins}m {secs}s\n"
-        f"👤 **Foydalanuvchi:** {user_name}\n\n"
-        f"{performance_msg}"
-    )
-    
-    await bot.send_message(
-        chat_id=user_id, 
-        text=score_card, 
-        reply_markup=get_completed_keyboard(code), 
-        parse_mode="Markdown"
-    )
+        correct_count = session.score
+        wrong_count = sum(1 for a in answers if a.selected_option_index != -1 and not a.is_correct)
+        skipped_count = session.selected_question_count - correct_count - wrong_count
+        answered_count = correct_count + wrong_count
+        
+        # Calculate rank & total unique participants for this specific chunk
+        total_participants_q = await db.execute(
+            select(func.count(func.distinct(models.QuizSession.user_id)))
+            .where(models.QuizSession.quiz_id == session.quiz_id)
+            .where(models.QuizSession.status == "completed")
+            .where(models.QuizSession.chunk_index == session.chunk_index)
+        )
+        total_participants = total_participants_q.scalar_one_or_none() or 0
+        
+        # Calculate users with higher best score than current user's score on this chunk
+        better_participants_q = await db.execute(
+            select(func.count(func.distinct(models.QuizSession.user_id)))
+            .where(models.QuizSession.quiz_id == session.quiz_id)
+            .where(models.QuizSession.status == "completed")
+            .where(models.QuizSession.chunk_index == session.chunk_index)
+            .where(models.QuizSession.score > session.score)
+        )
+        better_participants = better_participants_q.scalar_one_or_none() or 0
+        rank = better_participants + 1
+        
+        # Formulate chunk title suffix e.g., "Sun'iy Intellekt(26-50)"
+        if quiz.chunk_size > 0:
+            start_num = session.chunk_index * quiz.chunk_size + 1
+            end_num = min((session.chunk_index + 1) * quiz.chunk_size, quiz.total_questions)
+            quiz_title = f"{quiz.title}({start_num}-{end_num})"
+        else:
+            quiz_title = quiz.title
+            
+        # Build premium final score card message
+        score_card = (
+            f"🏁 **\"{quiz_title}\" testi yakunlandi!**\n\n"
+            f"_Siz {answered_count} ta savolga javob berdingiz:_\n\n"
+            f"✅ **To'g'ri – {correct_count}**\n"
+            f"❌ **Xato – {wrong_count}**\n"
+            f"⏳ **Tashlab ketilgan – {skipped_count}**\n"
+            f"⏱️ **{time_str}**\n\n"
+            f"{total_participants} tadan {rank}-o'rin.\n\n"
+            f"_Bu testda yana qatnashishingiz mumkin, lekin bu yetakchilardagi o'rningizni o'zgartirmaydi._"
+        )
+        
+        # Send dynamic keyboard
+        await bot.send_message(
+            chat_id=user_id, 
+            text=score_card, 
+            reply_markup=get_completed_session_keyboard(quiz.id, session.chunk_index, quiz.total_questions, quiz.chunk_size), 
+            parse_mode="Markdown"
+        )
