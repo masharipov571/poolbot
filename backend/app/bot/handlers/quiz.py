@@ -199,7 +199,7 @@ async def send_next_question_to_user(bot, user_id: int, session_id: str):
             
         # Get active question ID
         q_id = session.shuffled_questions[session.current_question_index]
-        q_q = await db.execute(select(models.Question).where(models.models.Question.id == q_id))
+        q_q = await db.execute(select(models.Question).where(models.Question.id == q_id))
         question = q_q.scalar_one_or_none()
         
         if not question:
