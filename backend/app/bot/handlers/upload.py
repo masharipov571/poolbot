@@ -2,6 +2,8 @@ import os
 import random
 import datetime
 from aiogram import Router, types, F
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 from ...database import SessionLocal
 from ... import models
@@ -12,6 +14,9 @@ from ..keyboards.inline import (
 )
 
 router = Router()
+
+class UploadStates(StatesGroup):
+    WaitingForDocument = State()
 
 # Directory for temp uploads
 UPLOAD_DIR = "./data/temp_uploads"
@@ -28,10 +33,11 @@ async def generate_unique_quiz_code(db) -> str:
             return code
 
 @router.callback_query(F.data == "auto_test_create")
-async def cb_auto_test_create(callback: types.CallbackQuery):
+async def cb_auto_test_create(callback: types.CallbackQuery, state: FSMContext):
     """
     Instructions when admin/user starts test creation.
     """
+    await state.set_state(UploadStates.WaitingForDocument)
     await callback.message.edit_text(
         "📝 **Avtomatik Test Tuzish bo'limi**\n\n"
         "Iltimos, test savollari yozilgan **DOCX**, **PDF** yoki **TXT** faylini yuboring.\n\n"
@@ -40,11 +46,12 @@ async def cb_auto_test_create(callback: types.CallbackQuery):
         parse_mode="Markdown"
     )
 
-@router.message(F.document)
-async def handle_document_upload(message: types.Message):
+@router.message(UploadStates.WaitingForDocument, F.document)
+async def handle_document_upload(message: types.Message, state: FSMContext):
     """
     Receives DOCX, PDF, or TXT documents and parses them in lenient mode.
     """
+    await state.clear()
     doc = message.document
     filename = doc.file_name
     _, ext = os.path.splitext(filename.lower())

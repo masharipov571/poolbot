@@ -1,5 +1,6 @@
 from aiogram import Router, types, F
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from ..keyboards.inline import get_start_keyboard, get_go_home_keyboard
 
 router = Router()
@@ -28,10 +29,12 @@ async def cmd_start(message: types.Message, command: CommandObject):
     await message.answer(welcome_text, reply_markup=get_start_keyboard(), parse_mode="Markdown")
 
 @router.callback_query(F.data == "go_home")
-async def cb_go_home(callback: types.CallbackQuery):
+async def cb_go_home(callback: types.CallbackQuery, state: FSMContext):
     """
     Returns user back to the primary landing dashboard.
+    Clears FSM state cleanly.
     """
+    await state.clear()
     welcome_text = (
         f"🤖 **PoolBot** - Professional Telegram Quiz platformasiga xush kelibsiz.\n\n"
         f"⚡ Kerakli bo'limni tanlash uchun quyidagi tugmalardan foydalaning:"
