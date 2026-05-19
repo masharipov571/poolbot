@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, func
 from ...database import SessionLocal
 from ... import models
-from ..keyboards.inline import get_go_home_keyboard
+from ..keyboards.inline import get_go_home_keyboard, get_start_keyboard
 from ..keyboards.reply import get_main_reply_keyboard
 from .upload import UploadStates
 from .quiz import QuizStates
@@ -90,8 +90,8 @@ async def msg_my_stats(message: types.Message):
     async with SessionLocal() as db:
         sess_q = await db.execute(
             select(func.count(models.QuizSession.id), func.sum(models.QuizSession.score))
-            .where(models.models.QuizSession.user_id == message.from_user.id)
-            .where(models.models.QuizSession.status == "completed")
+            .where(models.QuizSession.user_id == message.from_user.id)
+            .where(models.QuizSession.status == "completed")
         )
         total_sessions, total_score = sess_q.first()
         total_sessions = total_sessions or 0
@@ -106,8 +106,8 @@ async def msg_my_stats(message: types.Message):
         if total_sessions > 0:
             q_count_q = await db.execute(
                 select(func.sum(models.QuizSession.selected_question_count))
-                .where(models.models.QuizSession.user_id == message.from_user.id)
-                .where(models.models.QuizSession.status == "completed")
+                .where(models.QuizSession.user_id == message.from_user.id)
+                .where(models.QuizSession.status == "completed")
             )
             total_questions = q_count_q.scalar_one_or_none() or 0
             pct = round((total_score / total_questions) * 100, 1) if total_questions > 0 else 0
@@ -168,7 +168,7 @@ async def cb_go_home(callback: types.CallbackQuery, state: FSMContext):
         f"🤖 **PoolBot** - Professional Telegram Quiz platformasiga xush kelibsiz.\n\n"
         f"⚡ Boshqarish uchun pastdagi ixcham menyudan foydalanishingiz mumkin:"
     )
-    await callback.message.edit_text(welcome_text, reply_markup=get_go_home_keyboard(), parse_mode="Markdown")
+    await callback.message.edit_text(welcome_text, reply_markup=get_start_keyboard(), parse_mode="Markdown")
 
 @router.callback_query(F.data == "quiz_help")
 async def cb_quiz_help(callback: types.CallbackQuery):

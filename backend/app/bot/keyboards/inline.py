@@ -90,3 +90,22 @@ def get_go_home_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🏠 Bosh Menyu", callback_data="go_home")
     return builder.as_markup()
+
+def get_parts_keyboard(quiz_id: str, total: int, chunk: int) -> InlineKeyboardMarkup:
+    """
+    Generates a list of part selection buttons (e.g. 1-qism (1-25), 2-qism (26-50)).
+    """
+    builder = InlineKeyboardBuilder()
+    import math
+    num_parts = math.ceil(total / chunk)
+    for i in range(num_parts):
+        start_num = i * chunk + 1
+        end_num = min((i + 1) * chunk, total)
+        builder.button(
+            text=f"📦 {i+1}-qism ({start_num}-{end_num}-savollar)",
+            callback_data=f"playchunk_{quiz_id}_{i}"
+        )
+    builder.button(text="🏠 Bosh Menyu", callback_data="go_home")
+    builder.adjust(1)
+    return builder.as_markup()
+

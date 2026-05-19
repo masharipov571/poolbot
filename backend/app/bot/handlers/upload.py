@@ -28,7 +28,7 @@ async def generate_unique_quiz_code(db) -> str:
     """
     while True:
         code = str(random.randint(100000, 999999))
-        q = await db.execute(select(models.Quiz).where(models.models.Quiz.unique_code == code) if hasattr(models, "models") else select(models.Quiz).where(models.Quiz.unique_code == code))
+        q = await db.execute(select(models.Quiz).where(models.Quiz.unique_code == code))
         if not q.scalar_one_or_none():
             return code
 
@@ -181,7 +181,7 @@ async def cb_setup_shuffle(callback: types.CallbackQuery):
     timer = int(timer)
     
     async with SessionLocal() as db:
-        q = await db.execute(select(models.Quiz).where(models.models.Quiz.id == quiz_id) if hasattr(models, "models") else select(models.Quiz).where(models.Quiz.id == quiz_id))
+        q = await db.execute(select(models.Quiz).where(models.Quiz.id == quiz_id))
         quiz = q.scalar_one_or_none()
         
         if not quiz:

@@ -45,13 +45,14 @@ async def handle_waiting_quiz_code(message: types.Message, state: FSMContext):
     await state.clear()
     await start_quiz_by_code(message, code)
 
-async def start_quiz_by_code(message: types.Message, code: str):
+async def start_quiz_by_code(message: types.Message, code: str, user: types.User = None):
     """
-    Loads and runs the quiz by code.
-    Used by start deep-linking and normal FSM entry.
+    Loads the quiz by its 6-digit code.
+    Displays parts selection inline keyboard if quiz has multiple chunks.
     """
+    player = user or message.from_user
     async with SessionLocal() as db:
-        q = await db.execute(select(models.Quiz).where(models.models.Quiz.unique_code == code) if hasattr(models, "models") else select(models.Quiz).where(models.Quiz.unique_code == code))
+        q = await db.execute(select(models.Quiz).where(models.Quiz.unique_code == code))
         quiz = q.scalar_one_or_none()
         
         if not quiz:
@@ -63,26 +64,75 @@ async def start_quiz_by_code(message: types.Message, code: str):
             )
             return
             
-        # Determine dynamic sampling size (chunk size)
-        limit_count = quiz.chunk_size if quiz.chunk_size > 0 else quiz.total_questions
+        # If chunking is disabled or equals total questions, play directly
+        if quiz.chunk_size <= 0 or quiz.chunk_size >= quiz.total_questions:
+            await start_actual_quiz(message.bot, player, quiz, chunk_index=0)
+        else:
+            # Display inline keyboard options for parts selection
+            from ..keyboards.inline import get_parts_keyboard
+            await message.answer(
+                f"📋 **'{quiz.title}' testi topildi!**\n\n"
+                f"❓ **Jami savollar:** {quiz.total_questions} ta\n"
+                f"📦 **Har bir qismda:** {quiz.chunk_size} tadan savol\n\n"
+                f"⚡ Iltimos, topshirmoqchi bo'lgan test qismingizni tanlang:",
+                reply_markup=get_parts_keyboard(quiz.id, quiz.total_questions, quiz.chunk_size),
+                parse_mode="Markdown"
+            )
+
+@router.callback_query(F.data.startswith("playchunk_"))
+async def cb_play_chunk(callback: types.CallbackQuery):
+    """
+    Callback trigger for the selected chunk index. Starts the actual quiz.
+    """
+    _, quiz_id, chunk_index = callback.data.split("_")
+    chunk_index = int(chunk_index)
+    
+    await callback.message.delete()
+    
+    async with SessionLocal() as db:
+        q = await db.execute(select(models.Quiz).where(models.Quiz.id == quiz_id))
+        quiz = q.scalar_one_or_none()
         
-        # LIGHTWEIGHT Sampling: fetch random chunk dynamically at database level!
-        questions_q = await db.execute(
+        if not quiz:
+            await callback.answer("Quiz topilmadi.", show_alert=True)
+            return
+            
+        await start_actual_quiz(callback.bot, callback.from_user, quiz, chunk_index)
+
+async def start_actual_quiz(bot, user, quiz, chunk_index: int):
+    """
+    Slices the exact questions for the chosen chunk, shuffles, sets up QuizSession, and sends the first question.
+    """
+    async with SessionLocal() as db:
+        # Fetch all questions in ascending order of their creation (original order)
+        q_q = await db.execute(
             select(models.Question)
-            .where(models.models.Question.quiz_id == quiz.id)
-            .order_by(func.random())
-            .limit(limit_count)
+            .where(models.Question.quiz_id == quiz.id)
+            .order_by(models.Question.id.asc())
         )
-        selected_questions = questions_q.scalars().all()
+        all_questions = q_q.scalars().all()
         
+        if not all_questions:
+            await bot.send_message(chat_id=user.id, text="😔 Ushbu testda hech qanday yaroqli savol topilmadi.")
+            return
+            
+        # Slice for the selected chunk index
+        if quiz.chunk_size > 0:
+            start_idx = chunk_index * quiz.chunk_size
+            end_idx = start_idx + quiz.chunk_size
+            selected_questions = all_questions[start_idx:end_idx]
+        else:
+            selected_questions = all_questions
+            
         if not selected_questions:
-            await message.answer("😔 Ushbu testda hech qanday yaroqli savol topilmadi.")
+            await bot.send_message(chat_id=user.id, text="😔 Tanlangan qismda savollar topilmadi.")
             return
             
         # Handle Shuffling configurations
-        # mode: 'questions' (only questions), 'options' (only options), 'both' (both), 'none'
         shuf_mode = quiz.shuffle_mode or "none"
         
+        # Make a copy of selected questions so we can shuffle inside this chunk
+        selected_questions = list(selected_questions)
         if shuf_mode in ["questions", "both"]:
             random.shuffle(selected_questions)
             
@@ -105,7 +155,7 @@ async def start_quiz_by_code(message: types.Message, code: str):
             
         # Create a new active QuizSession
         session = models.QuizSession(
-            user_id=message.from_user.id,
+            user_id=user.id,
             quiz_id=quiz.id,
             selected_question_count=len(selected_questions),
             timer_seconds=quiz.timer_seconds or 0,
@@ -120,7 +170,7 @@ async def start_quiz_by_code(message: types.Message, code: str):
         await db.refresh(session)
         
         # Send first question
-        await send_next_question_to_user(message.bot, message.from_user.id, session.id)
+        await send_next_question_to_user(bot, user.id, session.id)
 
 @router.callback_query(F.data.startswith("start_code_quiz_"))
 async def cb_start_code_quiz(callback: types.CallbackQuery):
@@ -129,7 +179,7 @@ async def cb_start_code_quiz(callback: types.CallbackQuery):
     """
     code = callback.data.split("start_code_quiz_")[1]
     await callback.message.delete()
-    await start_quiz_by_code(callback.message, code)
+    await start_quiz_by_code(callback.message, code, user=callback.from_user)
 
 async def send_next_question_to_user(bot, user_id: int, session_id: str):
     """
@@ -316,7 +366,7 @@ async def complete_quiz_session(bot, user_id: int, session: models.QuizSession):
     
     # Get quiz unique code to reload cleanly
     async with SessionLocal() as db:
-        q_res = await db.execute(select(models.Quiz.unique_code).where(models.models.Quiz.id == session.quiz_id) if hasattr(models, "models") else select(models.Quiz.unique_code).where(models.Quiz.id == session.quiz_id))
+        q_res = await db.execute(select(models.Quiz.unique_code).where(models.Quiz.id == session.quiz_id))
         code = q_res.scalar_one_or_none() or ""
         
         db.add(session)
