@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+*.db
+*.db-journal
+
+# Node / Frontend
+node_modules/
+dist/
+.svelte-kit/
+.next/
+out/
+.nuxt/
+.cache/
+
+# Production builds locally created
+backend/static/
+
+# System Files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Application Data/Uploads
+backend/data/temp_uploads/*
+!backend/data/temp_uploads/.gitkeep
+data/
+db.sqlite3

@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: poolbot_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: poolbot_user
+      POSTGRES_PASSWORD: poolbot_secure_password
+      POSTGRES_DB: poolbot_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: poolbot_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: poolbot_backend
+    restart: always
+    environment:
+      - BOT_TOKEN=YOUR_REAL_TELEGRAM_BOT_TOKEN
+      - DATABASE_URL=postgresql+asyncpg://poolbot_user:poolbot_secure_password@db:5432/poolbot_db
+      - JWT_SECRET=change_me_to_something_very_secure_in_production_123
+      - ADMIN_TELEGRAM_ID=123456789
+      - HOST=0.0.0.0
+      - PORT=8000
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./backend/data:/app/data
+    ports:
+      - "8000:8000"
+
+  nginx:
+    image: nginx:alpine
+    container_name: poolbot_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/static:/usr/share/nginx/html
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
