@@ -20,12 +20,16 @@ def parse_quiz_text(raw_text: str) -> List[Dict[str, Any]]:
     Incorrect Answer 2
     +++
     
-    Robust upgrades:
-    - Skips blocks without a '#' marked option (perfectly ignores headers, intros, and malformed questions).
-    - Ignores leading whitespaces when checking for '#' prefix (e.g., '  #Option' works).
+    Upgrades:
+    - Splitting with regex boundary \+{3,} and ={3,} to ignore extra signs or whitespaces.
+    - Robust UTF-8 and carriage return cleanup.
+    - Support for `#Option`, `# Option` and `Option #`.
     """
-    # Split text by '+++' boundary
-    blocks = raw_text.split("+++")
+    # Normalize carriage returns and newlines
+    raw_text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    
+    # Split text by 3 or more '+' boundary (e.g., +++, ++++)
+    blocks = re.split(r'\+{3,}', raw_text)
     questions = []
     
     for i, block in enumerate(blocks):
@@ -33,46 +37,41 @@ def parse_quiz_text(raw_text: str) -> List[Dict[str, Any]]:
         if not block:
             continue
             
-        # Split by '===' boundary
-        parts = [p.strip() for p in block.split("===") if p.strip()]
+        # Split by 3 or more '=' boundary (e.g., ===, ====)
+        parts = [p.strip() for p in re.split(r'={3,}', block) if p.strip()]
         
-        if len(parts) < 2:
-            # Not a valid question block (e.g., header, title, description)
+        if len(parts) < 3:
+            # Not a valid question block (must have at least question text and 2 options)
             continue
             
         question_text = parts[0]
         options = parts[1:]
         
-        # Robust check: Ensure at least one option starts with '#' (ignoring spaces)
-        has_correct = False
-        for opt in options:
-            if opt.strip().startswith("#"):
-                has_correct = True
-                break
-                
-        if not has_correct:
-            # If no option has '#', it's likely header/intro text or a malformed block.
-            # We simply skip it to prevent crashing the entire quiz import!
-            continue
-            
         correct_index = -1
         cleaned_options = []
         
         for idx, option in enumerate(options):
             opt_stripped = option.strip()
-            if opt_stripped.startswith("#"):
+            # Support both '#Option', '# Option' and 'Option #'
+            if opt_stripped.startswith("#") or opt_stripped.endswith("#"):
                 if correct_index != -1:
                     raise QuizParseError(
-                        f"Xatolik yuz berdi: Savol '{question_text[:50]}...'da birdan ortiq to'g'ri javob (#) topildi."
+                        f"Xatolik: '{question_text[:50]}...' savolida birdan ortiq to'g'ri javob (#) topildi."
                     )
                 correct_index = idx
                 # Remove '#' and strip spaces
-                cleaned_options.append(opt_stripped[1:].strip())
+                if opt_stripped.startswith("#"):
+                    cleaned_options.append(opt_stripped[1:].strip())
+                else:
+                    cleaned_options.append(opt_stripped[:-1].strip())
             else:
-                cleaned_options.append(option)
+                cleaned_options.append(opt_stripped)
                 
+        if correct_index == -1:
+            # Skip blocks that have no correct answer marked (likely intro or explanation text)
+            continue
+            
         if len(cleaned_options) < 2:
-            # Question must have at least 2 options to be played
             continue
             
         if len(cleaned_options) > 10:
@@ -87,19 +86,38 @@ def parse_quiz_text(raw_text: str) -> List[Dict[str, Any]]:
         })
         
     if not questions:
-        raise QuizParseError("Faylda hech qanday yaroqli test savoli (boshiga '#' qo'yilgan to'g'ri javobga ega savol) topilmadi. Formatni tekshiring.")
+        raise QuizParseError(
+            "Faylda hech qanday yaroqli test savoli topilmadi!\n\n"
+            "Iltimos, faylingizda quyidagi shartlarga to'liq amal qilinganini tekshiring:\n"
+            "1. Har bir savol boshlanishi va tugashida `+++` belgilari bo'lishi shart.\n"
+            "2. Savol va variantlar orasida `===` ajratuvchisi bo'lishi shart.\n"
+            "3. To'g'ri javob variantining boshida (yoki oxirida) `#` belgisi bo'lishi shart.\n"
+            "4. Variantlar soni 2 tadan 10 tagacha bo'lishi shart."
+        )
         
     return questions
 
 def parse_docx(file_path: str) -> List[Dict[str, Any]]:
     """
-    Extracts text from a DOCX file and parses it.
+    Extracts text from paragraphs and tables inside a DOCX file.
     """
     try:
         doc = Document(file_path)
         full_text = []
+        
+        # 1. Read all normal paragraphs
         for para in doc.paragraphs:
-            full_text.append(para.text)
+            if para.text.strip():
+                full_text.append(para.text)
+                
+        # 2. Read all tables and cells (in case questions are inside table grids!)
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text.strip():
+                        # Standardize boundary formatting inside tables
+                        full_text.append(cell.text)
+                        
         text = "\n".join(full_text)
         return parse_quiz_text(text)
     except Exception as e:
@@ -147,11 +165,10 @@ def parse_quiz_file(file_path: str) -> List[Dict[str, Any]]:
         return parse_docx(file_path)
     elif ext == ".pdf":
         return parse_pdf(file_path)
-    elif ext in [".txt", ".doc"]: # Treat doc as txt or let them convert if doc fails. Or we can try docx logic.
-        # Note: True binary legacy .doc is rarely used today, but if passed, we attempt as raw text or raise error.
+    elif ext in [".txt", ".doc"]:
         try:
             return parse_txt(file_path)
         except Exception:
-            raise QuizParseError("Eski .DOC formatini to'g'ridan-to'g'ri o'qib bo'lmadi. Iltimos uni .DOCX yoki .TXT formatiga o'tkazib yuboring.")
+            raise QuizParseError("Eski .DOC formatini o'qib bo'lmadi. Iltimos, uni .DOCX yoki .TXT formatiga o'tkazib yuboring.")
     else:
         raise QuizParseError(f"Qo'llab-quvvatlanmaydigan fayl formati: {ext}. Faqat DOCX, PDF, TXT fayllari qabul qilinadi.")
